@@ -1,0 +1,238 @@
+---
+title: "Lab 2: Sentiment Analysis I"
+author: "Maxwwell Patterson"
+date: "2024-04-16"
+output: html_document
+---
+
+## Assignment (Due 4/16 by 11:59 PM)
+
+```{r, include=FALSE, message=FALSE}
+# Install packages
+knitr::opts_chunk$set(echo = TRUE)
+library(LexisNexisTools)
+library(dplyr)
+library(readr)
+library(stringr)
+library(here)
+library(tidytext)
+library(textdata)
+library(tidyr) 
+library(ggplot2)
+library(RColorBrewer)
+```
+
+
+### Obtain your data and load it into R
+
+-   Access the Nexis Uni database through the UCSB library: <https://www.library.ucsb.edu/research/db/211>
+
+-   Choose a key search term or terms to define a set of articles.
+
+My key words are "Kern" and "oil"!
+
+-   Use your search term along with appropriate filters to obtain and download a batch of at least 100 full text search results (.docx). You are limited to downloading 100 articles at a time, so if you have more results than that, you have to download them in batches (rows 1-100, 101-200, 201-300 etc.)
+
+I filtered for Law Reviews and Journals in Colorado and pulled 100 articles from the site.
+
+    Guidance for {LexisNexisTools} : <https://github.com/JBGruber/LexisNexisTools/wiki/Downloading-Files-From-Nexis>
+
+-   Read your Nexis article documents into RStudio.
+
+```{r, warning=FALSE}
+setwd("/Users/maxwellpatterson/Desktop/classes/spring/eds231/eds231-materials/Nexis/kern_oil_news")
+
+# Reading in docx files
+post_files <- list.files(pattern = ".docx",
+                         path = getwd(),
+                         full.names = TRUE,
+                         recursive = TRUE,
+                         ignore.case = TRUE)
+
+# Use LNT to handle docs
+dat <- lnt_read(post_files)
+
+meta_df <- dat@meta
+articles_df <- dat@articles
+paragraphs_df <- dat@paragraphs
+
+dat2 <- tibble(Date=meta_df$Date, Headline = meta_df$Headline, id = articles_df$ID, text = articles_df$Article)
+```
+
+
+-   Use the full text of the articles for the analysis. Inspect the data (in particular the full-text article data).
+
+```{=html}
+<!-- -->
+```
+-   If necessary, clean any artifacts of the data collection process (hint: this type of thing should be removed: "Apr 04, 2022( Biofuels Digest: <http://www.biofuelsdigest.com/Delivered> by Newstex") and any other urls)
+
+-   Remove any clear duplicate articles. LNT has a method for this, but it doesn't seem to work, so you probably need to do it manually.
+
+```{r}
+# Cleaning up data
+dat2 <- dat2 %>%
+  dplyr::filter(!is.na(Headline))
+```
+
+
+### Explore your data and conduct the following analyses:
+
+```{r}
+# Load bing sentiment lexicon from tidytext
+bing_sent <- get_sentiments("bing")
+head(bing_sent)
+```
+
+
+```{r}
+# Score words using wing lexicon
+text_words <- dat2 %>% 
+  unnest_tokens(output=word, input=text, token='words')
+
+sent_words <- text_words %>%
+  anti_join(stop_words, by='word') %>%
+  inner_join(bing_sent, by='word') %>%
+  mutate(sent_num = case_when(sentiment =='negative'~-1,
+                              sentiment =='positive'~1))
+```
+
+1.  Calculate mean sentiment across all your articles
+
+```{r mean_sent}
+sent_article <- sent_words %>%
+  group_by(Headline) %>%
+  count(id, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from=n)%>%
+  mutate(polarity = positive-negative)
+
+mean_sent <- mean(sent_article$polarity, na.rm = T)
+
+paste0("Mean sentiment across all articles: ", mean_sent)
+```
+
+
+2.  Sentiment by article plot. The one provided in class needs significant improvement.
+
+```{r, warning=FALSE}
+ggplot(sent_article, aes(x = id)) +
+  geom_col(aes(y = negative, fill = "Negative"), position = "identity", show.legend = TRUE) +
+  geom_col(aes(y = positive, fill = "Positive"), position = "identity", show.legend = TRUE) +
+  scale_fill_manual(values = c("Negative" = "red4", "Positive" = "slateblue3"), name = "Sentiment") +
+  labs(
+    title = "Sentiment Analysis: Oil + Kern",
+    x = "Article ID",
+    y = "Sentiment Score"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+  )
+```
+
+```{r}
+ggplot(sent_article, aes(x = reorder(id, positive - negative), y = positive - negative)) +
+  geom_col(aes(fill = ifelse(positive - negative > 0, "slateblue3", "red4"))) +
+  scale_fill_manual(values = c("slateblue3", "red4"), guide = "none") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 14, hjust = 0.5)
+  ) +
+  labs(
+    title = "Ordered Positive and Negative Sentiment Scores in Each Article"
+  )
+```
+
+
+3.  Most common nrc emotion words and plot by emotion
+
+```{r}
+# Get most common nrc emotion words
+nrc_sent <- get_sentiments('nrc')
+nrc_word_counts <- text_words %>%
+  anti_join(stop_words, by='word') %>%
+  inner_join(nrc_sent) %>%
+  count(word, sentiment, sort=T)
+  
+nrc_word_counts
+```
+
+```{r}
+# Plot by emotion 
+nrc_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 5) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = 'Count', y = NULL, title = "Most Common NRC Emotion Words") +
+  theme_minimal()
+```
+
+
+4.  Look at the nrc contribution to emotion by word plots. Identify and reclassify or remove at least one term that gives misleading results in your context.
+
+```{r}
+misleading_words <- c("court", "kern", "attorney", "public", "county")
+nrc_word_counts_new <- nrc_word_counts %>%
+  dplyr::filter(!word %in% misleading_words)
+```
+
+```{r}
+nrc_word_counts_new %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 7) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = 'Count', y = NULL, title = "Most Common NRC Emotion Words (New)") +
+  theme_minimal()
+```
+
+
+
+5.  Plot the amount of nrc emotion words as a percentage of all the emotion words used each day (aggregate text from articles published on the same day). How does the distribution of emotion words change over time? Can you think of any reason this would be the case?
+
+```{r, warning=FALSE}
+daily_emotions <- sent_words %>%
+  inner_join(nrc_sent %>% rename(em_sentiment = sentiment), by = 'word') %>%
+  group_by(Date, em_sentiment) %>%
+  summarise(count = n()) %>%
+  mutate(total = sum(count)) %>%
+  group_by(Date) %>%
+  mutate(percentage = count / total * 100) %>%
+  ungroup() %>%
+  pivot_wider(names_from = em_sentiment, values_from = percentage, values_fill = 0)
+
+ggplot(daily_emotions, aes(x = Date)) +
+  geom_line(aes(y = anger, color = "anger"), size = 1) +
+  geom_line(aes(y = anticipation, color = "anticipation"), size = 1) +
+  geom_line(aes(y = disgust, color = "disgust"), size = 1) +
+  geom_line(aes(y = fear, color = "fear"), size = 1) +
+  geom_line(aes(y = joy, color = "joy"), size = 1) +
+  geom_line(aes(y = sadness, color = "sadness"), size = 1) +
+  geom_line(aes(y = surprise, color = "surprise"), size = 1) +
+  geom_line(aes(y = trust, color = "trust"), size = 1) +
+  scale_color_manual(name = "Emotion", values = brewer.pal(8, "Set1")) +
+  labs(
+    x = "Date",
+    y = "Percentage of Emotion Words",
+    title = "Distribution of Emotion Words Over Time"
+  ) +
+  theme_minimal()
+```
+
+
+It seems like there were significant events at the end of 2020/start of 2021. This is reflected by the high levels of anger, but also the high levels of trust are worth investigating. It seems like the words that are associated with trust are related to legal concepts, so they may not in fact be as interesting or informative as the more typical understanding of trust in an interpersonal kind of context. These spikes are likely due to ceratin policy additions or reactions to new policies.
+

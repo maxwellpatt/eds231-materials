@@ -1,0 +1,163 @@
+---
+title: "Lab 1: NYT API"
+author: "Maxwell Patterson"
+date: "2024-04-09"
+output: html_document
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(jsonlite) #convert results from API queries into R-friendly formats 
+library(tidyverse) #tidy
+library(tidytext) #text data management and analysis
+library(ggplot2) #plot word frequencies and publication dates
+library(SnowballC)
+library(gridExtra)
+```
+
+```{r}
+#assign API key.  When you create a NYT Dev account, you will be given a key
+API_KEY <- "2fNBe1WRGdbufTyARJJgnwaWt9rr6Ers"
+
+# Define key word -- I will be using oil
+env_keyword <- "oil"
+
+# Construct the query URL
+baseurl <- paste0("http://api.nytimes.com/svc/search/v2/articlesearch.json?q=",
+                 env_keyword,
+                 "&begin_date=20210101&end_date=20230401&facet_filter=true&api-key=",
+                 API_KEY)
+
+# Fetch the data
+initialQuery <- fromJSON(baseurl)
+```
+
+```{r}
+# Iterate through the pages to fetch data
+pages <- list()
+maxPages <- 20
+for (i in 0:maxPages) {
+  nytSearch <- fromJSON(paste0(baseurl, "&page=", i), flatten = TRUE) %>% data.frame()
+  message("Retrieving page ", i)
+  pages[[i+1]] <- nytSearch
+  Sys.sleep(12)
+}
+
+# Combine pages into a single df
+nyt_df <- bind_rows(pages)
+```
+
+```{r}
+# Prep the data
+nytDat <- nyt_df
+nytDat %>%
+  mutate(pubDay = gsub("T.*", "", response.docs.pub_date)) %>%
+  group_by(pubDay) %>%
+  summarise(count = n()) %>%
+  filter(count >= 2) %>% 
+  ungroup()
+
+# Plot  publications per day
+nytDat %>%
+  mutate(pubDay=gsub("T.*","",response.docs.pub_date)) %>% 
+  group_by(pubDay) %>%
+  summarise(count=n()) %>%
+  filter(count >= 3) %>%
+  ggplot() +
+  geom_bar(aes(x=reorder(pubDay, count), y=count), stat="identity") +
+  coord_flip() #bring date so bars go longwise
+```
+
+
+```{r}
+# Prep the word frequency data
+tokenized <- nytDat %>%
+  filter(response.docs.news_desk != c("Dining", "Culture", "Magazine", "Obits")) %>%
+  unnest_tokens(word, response.docs.lead_paragraph)
+
+# Add stopwords
+stopwords <- data("stop_words")
+tokenized <- tokenized %>%
+  anti_join(stop_words)
+
+# Stem a key term and its variants
+tokenized <- tokenized %>%
+  mutate(word = wordStem(word))
+
+# Remove numbers
+tokenized <- tokenized %>%
+  filter(!grepl("[:digit:]", word))
+
+# Plot the word frequencies
+tokenized %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 10) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+```{r}
+# Prep the data using the headlines
+nytDatHeadlines <- nyt_df %>%
+  mutate(pubDay = gsub("T.*", "", response.docs.pub_date)) %>%
+  group_by(pubDay) %>%
+  summarise(count = n()) %>%
+  filter(count >= 2)
+
+# Plot the publications per day using headlines
+ggplot(nytDatHeadlines) +
+  geom_bar(aes(x = reorder(pubDay, count), y = count), stat = "identity") +
+  coord_flip() +
+  labs(x = "Publication Date", y = "Count")
+
+# Prepare the word frequency data using headlines
+tokenizedHeadlines <- nyt_df %>%
+  filter(response.docs.news_desk != c("Sports", "Games")) %>%
+  unnest_tokens(word, response.docs.headline.main)
+
+# Transform data by removing stop words, stemming, and removing digits
+tokenizedHeadlines <- tokenizedHeadlines %>%
+  anti_join(stop_words) %>%
+  mutate(word = wordStem(word)) %>%
+  filter(!grepl("[:digit:]", word))
+
+# Plot the word frequencies using headlines
+tokenizedHeadlines %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 3) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+
+```
+
+
+```{r}
+# Create the first paragraph word frequency plot
+plot1 <- tokenized %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 8) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = "First Paragraph")
+
+# Create the headline word frequency plot  
+plot2 <- tokenizedHeadlines %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 3) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = "Headline")
+
+# Plot side by side
+grid.arrange(plot1, plot2, ncol = 2)
+```
+
+
+Plotting the word frequencies for the first paragraph and headline side-by-side show that the words are very similar, but the rankings are fairly different. Both groups have some location-specific information, and the headline section includes Alaska while the first paragraph does not which could be worth investigating. Also, Europe shows up often in both groups, indicating that the oil industry is likely experiencing something important in the continent. Finally, oil seems to be related to geopolitical tension, since words like war, plan, and power occur in these groups. It is worth noting that these frequent words also are not really related to climate, indicating that when the news discusses oil, it is likely to be around some geopolitical event.
+
