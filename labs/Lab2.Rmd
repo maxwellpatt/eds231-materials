@@ -72,7 +72,8 @@ dat2 <- tibble(Date=meta_df$Date, Headline = meta_df$Headline, id = articles_df$
 ```{r}
 # Cleaning up data
 dat2 <- dat2 %>%
-  dplyr::filter(!is.na(Headline))
+  dplyr::filter(!is.na(Headline)) %>% 
+  distinct(Headline, .keep_all = TRUE)
 ```
 
 

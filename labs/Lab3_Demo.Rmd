@@ -5,7 +5,7 @@ date: "2024-04-15"
 output: html_document
 ---
 
-```{r packages}
+```{r packages, message=FALSE}
 library(quanteda)
 library(tm)
 library(topicmodels)
