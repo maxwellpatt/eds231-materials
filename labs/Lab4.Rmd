@@ -1,0 +1,224 @@
+---
+title: "Lab 4"
+author: "Maxwell Patterson"
+date: "2024-04-24"
+output: html_document
+---
+
+Lab 4 Assignment: Due May 7 at 11:59pm
+
+```{r sourcing, echo=FALSE}
+rmarkdown::render("Lab4_Demo.Rmd")
+rmarkdown::render("Lab4_Demo_2.Rmd")
+```
+
+
+1. Select another classification algorithm.  
+
+# XGBoost
+
+2. Conduct an initial out-of-the-box model fit on the training data and prediction on the test data.  Assess the performance of this initial model. 
+
+```{r px, message=FALSE}
+library(tidytext)
+library(tidyverse)
+library(tidymodels)
+library(textrecipes)
+library(xgboost)
+library(dplyr)
+library(vip)
+```
+
+
+```{r}
+urlfile <- "https://raw.githubusercontent.com/MaRo406/EDS-231-text-sentiment/main/data/climbing_reports_model_dat.csv"
+incidents_df <- readr::read_csv(url(urlfile))
+```
+```{r}
+set.seed(650)
+
+incidents2class <- incidents_df %>%
+  mutate(fatal = factor(ifelse(is.na(Deadly), "non-fatal", "fatal")))
+
+incidents_split <- initial_split(incidents2class, strata = fatal)
+incidents_train <- training(incidents_split)
+incidents_test <- testing(incidents_split)
+```
+
+```{r}
+incidents_rec <- recipe(fatal ~ Text, data = incidents_train)
+
+recipe <- incidents_rec %>%
+  step_tokenize(Text) %>%
+  step_tokenfilter(Text, max_tokens = 1000) %>%
+  step_tfidf(Text)
+```
+
+```{r}
+xgb_spec <- boost_tree() %>%
+  set_mode("classification") %>%
+  set_engine("xgboost")
+```
+
+```{r}
+xgb_spec <- boost_tree() %>%
+  set_mode("classification") %>%
+  set_engine("xgboost")
+```
+
+```{r}
+xgb_wf <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(xgb_spec)
+```
+
+```{r}
+xgb_fit <- xgb_wf %>%
+  fit(data = incidents_train)
+
+xgb_predictions <- xgb_fit %>%
+  predict(new_data = incidents_test, type = "prob") %>%
+  bind_cols(incidents_test) %>%
+  mutate(.pred_class = factor(if_else(.pred_fatal > 0.5, "fatal", "non-fatal"), levels = levels(incidents_test$fatal)))
+
+xgb_metrics <- xgb_predictions %>%
+  metrics(truth = fatal, estimate = .pred_class)
+
+xgb_metrics
+```
+
+
+
+3. Select the relevant hyperparameters for your algorithm and tune your model.
+
+```{r}
+xgb_spec_tune <- boost_tree(
+  trees = tune(),
+  tree_depth = tune(),
+  learn_rate = tune(),
+  loss_reduction = tune(),
+  min_n = tune(),
+) %>%
+  set_mode("classification") %>%
+  set_engine("xgboost")
+
+xgb_wf_tune <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(xgb_spec_tune)
+
+xgb_grid <- grid_regular(
+  trees(range = c(50, 300)),
+  tree_depth(range = c(2, 6)),
+  learn_rate(range = c(-5, -1)),
+  loss_reduction(range = c(-3, -1)),
+  min_n(range = c(2, 20)),
+  levels = 3
+)
+
+set.seed(123)
+xgb_tuned <- tune_grid(
+  xgb_wf_tune,
+  resamples = incidents_folds,
+  grid = xgb_grid,
+  control = control_grid(save_pred = TRUE),
+  metrics = metric_set(accuracy, roc_auc)
+)
+
+xgb_best_params <- xgb_tuned %>%
+  select_best(metric = "roc_auc")
+```
+
+
+4. Conduct a model fit using your newly tuned model specification.  How does it compare to your out-of-the-box model?
+
+```{r}
+xgb_spec_tuned <- finalize_model(xgb_spec_tune, xgb_best_params)
+
+xgb_wf_tuned <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(xgb_spec_tuned)
+
+xgb_fit_tuned <- xgb_wf_tuned %>%
+  fit(data = incidents_train)
+
+xgb_predictions_tuned <- xgb_fit_tuned %>%
+  predict(new_data = incidents_test, type = "prob") %>%
+  bind_cols(incidents_test) %>%
+  mutate(.pred_class = factor(if_else(.pred_fatal > 0.5, "fatal", "non-fatal"), levels = levels(incidents_test$fatal)))
+
+xgb_metrics_tuned <- xgb_predictions_tuned %>%
+  metrics(truth = fatal, estimate = .pred_class)
+
+xgb_metrics_tuned
+
+# Compare the performance of the tuned model with the out-of-the-box model
+comparison_metrics <- bind_rows(
+  xgb_metrics %>% mutate(model = "Out-of-the-box"),
+  xgb_metrics_tuned %>% mutate(model = "Tuned")
+)
+
+comparison_metrics
+```
+
+We see a slight improvement through the tuning process with the accuracy being a touch higher.
+
+
+5.
+  a. Use variable importance to determine the terms most highly associated with non-fatal reports?  What about terms associated with fatal reports? OR
+  b. If you aren't able to get at variable importance with your selected algorithm, instead tell me how you might in theory be able to do it. Or how you might determine the important distinguishing words in some other way. 
+  
+```{r}
+xgb_fit_tuned %>%
+  extract_fit_engine() %>%
+  vip(num_features = 20)
+```
+  
+  This shows that words strongly related to fatalities, like died, body, and death, are the most important in determining the classification of a text. This makes sense as the presence of these words almost certainly means the climber had passed away in the accident, and are therefore very useful and important pointers in determining the correct classification.
+
+6. Predict fatality of the reports in the test set.  Compare this prediction performance to that of the Naive Bayes and Lasso models.  Why do you think your model performed as it did, relative to the other two?
+
+```{r}
+# Naive Bayes and Lasso model predictions 
+nb_predictions <- nb_fit %>%
+  predict(new_data = incidents_test, type = "prob") %>%
+  bind_cols(incidents_test) %>%
+  mutate(.pred_class = factor(if_else(.pred_fatal > 0.5, "fatal", "non-fatal"), levels = levels(incidents_test$fatal)))
+
+lasso_predictions <- fitted_lasso %>%
+  predict(new_data = incidents_test, type = "prob") %>%
+  bind_cols(incidents_test) %>%
+  mutate(.pred_class = factor(if_else(.pred_fatal > 0.5, "fatal", "non-fatal"), levels = levels(incidents_test$fatal)))
+
+# Compare performance
+nb_metrics <- nb_predictions %>%
+  metrics(truth = fatal, estimate = .pred_class)
+
+lasso_metrics <- lasso_predictions %>%
+  metrics(truth = fatal, estimate = .pred_class)
+
+comparison_metrics_final <- bind_rows(
+  xgb_metrics_tuned %>% mutate(model = "XGBoost"),
+  nb_metrics %>% mutate(model = "Naive Bayes"),
+  lasso_metrics %>% mutate(model = "Lasso")
+)
+
+comparison_metrics_final
+```
+
+
+Based on the final comparison of the prediction performance, the XGBoost model saw an accuracy of 0.9192 and a Kappa score of 0.7353, outperforming the Naive Bayes and Lasso models from the demo. The Naive Bayes model had a higher accuracy of 0.7994 but a significantly lower Kappa score of 0.0385, while the Lasso model had an accuracy of 0.9163 and a Kappa score of 0.7043.
+
+The XGBoost model likely performed better than the other models because of its ability to capture complex interactions and nonlinear relationships between the text features and the target. XGBoost is an ensemble learning algorithm that combines multiple weak learners to create a strong learner. It iteratively trains decision trees and hones in on misclassified samples from previous iterations, and this allows it to learn from its mistakes and improve its classification performance. Additionally, the tuning process of the XGBoost model helped to optimize its hyperparameters and make it more powerful. In contrast, Naive Bayes is a simpler probabilistic classifier that assumes independence between features, which may not actually hold true in the text data. Lasso regression, while effective for feature selection, may not capture the complex interactions present in the text data as well as XGBoost. All in all, the XGBoost model's ability to handle complex relationships and its robustness through the ensemble approach likely contributed to its superior performance compared to the Naive Bayes and Lasso models.
+
+
+
+
+
+
+
+
+
+
+
+
+

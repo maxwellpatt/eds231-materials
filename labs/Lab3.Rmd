@@ -3,8 +3,8 @@ title: "Lab3"
 author: "Maxwell Patterson"
 date: "2024-04-17"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 ---
 ### Assignment Lab 3:
 
@@ -20,6 +20,7 @@ library(ldatuning)
 library(tidyverse)
 library(tidytext)
 library(reshape2)
+library(LexisNexisTools)
 ```
 
 1.  Create a corpus from your articles.
@@ -57,7 +58,7 @@ dat2_corpus <- corpus(dat2$text)
 
 ```{r}
 # add stop words
-add_stops <- stopwords(kind = quanteda_options("langauge_stopwords"))
+add_stops <- stopwords(kind = quanteda_options("language_stopwords"))
 
 # examining tokens
 # tokens(dat2_corpus)
